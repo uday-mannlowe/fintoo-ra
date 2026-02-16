@@ -1,9 +1,11 @@
 
 from fastapi import APIRouter, HTTPException, status
 from models.user import (
-    EmailCheckRequest, EmailCheckResponse, OnboardingRequest, 
-    OnboardingResponse, AddAssetsRequest, AddLoansRequest, 
-    UpdateIncomeRequest, UserSnapshot
+    EmailCheckRequest, EmailCheckResponse, OnboardingRequest,
+    OnboardingResponse, AddAssetsRequest, AddLoansRequest,
+    UpdateIncomeRequest, UpdateExpenseRequest,
+    AddPostRetirementIncomeRequest, UpdateAssetRequest, UpdateLoanRequest,
+    UserSnapshot,
 )
 from services.onboarding import OnboardingService
 import logging
@@ -166,37 +168,79 @@ async def update_income(user_id: str, request: UpdateIncomeRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update income"
         )
-    
 
-from services.calculation_service import CalculationService
 
-@router.post("/calculate/{user_id}")
-async def run_retirement_calculation(user_id: str):
+@router.post("/expenses/{user_id}")
+async def update_expense(user_id: str, request: UpdateExpenseRequest):
     """
-    Run retirement calculations for a user
+    Update monthly household expense (versioned).
+
+    Closes the current expense record and creates a new one.
+    Auto-triggers retirement recalculation.
     """
     try:
-        snapshot = OnboardingService.get_user_snapshot(user_id)
-        if not snapshot:
-            raise HTTPException(404, "User not found")
-        
-        result = CalculationService.calculate_and_store(user_id, snapshot)
-        
-        return {
-            "success": True,
-            "calculation": result
-        }
+        return OnboardingService.update_expense(user_id, request)
     except Exception as e:
-        raise HTTPException(500, str(e))
+        logger.error(f"Error in update_expense: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update expense"
+        )
 
-@router.get("/calculation/{user_id}")
-async def get_calculation(user_id: str):
-    """Get latest calculation results"""
+
+@router.post("/post-retirement-income/{user_id}")
+async def add_post_retirement_income(user_id: str, request: AddPostRetirementIncomeRequest):
+    """
+    Add expected post-retirement income sources (pension, rental, annuity).
+
+    These improve projection accuracy but are optional.
+    Auto-triggers retirement recalculation.
+    """
     try:
-        result = CalculationService.get_latest(user_id)
-        if not result:
-            raise HTTPException(404, "No calculations found")
-        
-        return {"success": True, "data": result}
+        return OnboardingService.add_post_retirement_income(user_id, request)
     except Exception as e:
-        raise HTTPException(500, str(e))
+        logger.error(f"Error in add_post_retirement_income: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to add post-retirement income"
+        )
+
+
+@router.put("/assets/{user_id}/{asset_id}")
+async def update_retirement_asset(user_id: str, asset_id: str, request: UpdateAssetRequest):
+    """
+    Update an existing retirement asset (versioned).
+
+    Deactivates the old record and inserts a new one — history preserved.
+    Auto-triggers retirement recalculation.
+    """
+    try:
+        return OnboardingService.update_retirement_asset(user_id, asset_id, request)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in update_retirement_asset: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update asset"
+        )
+
+
+@router.put("/loans/{user_id}/{loan_id}")
+async def update_loan(user_id: str, loan_id: str, request: UpdateLoanRequest):
+    """
+    Update an existing loan — outstanding balance and EMI (versioned).
+
+    Deactivates the old record and inserts a new one — history preserved.
+    Auto-triggers retirement recalculation.
+    """
+    try:
+        return OnboardingService.update_loan(user_id, loan_id, request)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in update_loan: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update loan"
+        )

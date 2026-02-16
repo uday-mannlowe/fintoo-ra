@@ -72,16 +72,12 @@ class RetirementEngine:
         return result
 
     def _apply_assumptions(self, assumptions: Dict) -> Dict:
-        """Validate and apply dynamic assumptions with safe bounds."""
+        """
+        Accept assumptions from either DB keys (general_inflation_rate)
+        or legacy Groq keys (general_inflation).  Safe bounds enforced.
+        """
         if not assumptions:
-            return {
-                "general_inflation": self.GENERAL_INFLATION,
-                "healthcare_inflation": self.HEALTHCARE_INFLATION,
-                "pre_retirement_return": self.PRE_RETIREMENT_RETURN,
-                "post_retirement_return": self.POST_RETIREMENT_RETURN,
-                "life_expectancy": self.LIFE_EXPECTANCY,
-                "safety_buffer_years": self.SAFETY_BUFFER_YEARS,
-            }
+            return self._snapshot()
 
         def _num(value, min_v, max_v, default):
             try:
@@ -92,17 +88,18 @@ class RetirementEngine:
 
         def _int(value, min_v, max_v, default):
             try:
-                v = int(value)
+                v = int(float(value))
             except Exception:
                 return default
             return max(min_v, min(max_v, v))
 
+        # Support both DB key names and legacy Groq short names
         self.GENERAL_INFLATION = _num(
-            assumptions.get("general_inflation"),
+            assumptions.get("general_inflation_rate") or assumptions.get("general_inflation"),
             0.02, 0.10, self.GENERAL_INFLATION
         )
         self.HEALTHCARE_INFLATION = _num(
-            assumptions.get("healthcare_inflation"),
+            assumptions.get("healthcare_inflation_rate") or assumptions.get("healthcare_inflation"),
             0.04, 0.12, self.HEALTHCARE_INFLATION
         )
         self.PRE_RETIREMENT_RETURN = _num(
@@ -114,7 +111,7 @@ class RetirementEngine:
             0.03, 0.10, self.POST_RETIREMENT_RETURN
         )
         self.LIFE_EXPECTANCY = _int(
-            assumptions.get("life_expectancy"),
+            assumptions.get("life_expectancy_years") or assumptions.get("life_expectancy"),
             75, 100, self.LIFE_EXPECTANCY
         )
         self.SAFETY_BUFFER_YEARS = _int(
@@ -122,14 +119,17 @@ class RetirementEngine:
             0, 10, self.SAFETY_BUFFER_YEARS
         )
 
+        return self._snapshot(assumptions.get("rationale", ""))
+
+    def _snapshot(self, rationale: str = "") -> Dict:
         return {
-            "general_inflation": self.GENERAL_INFLATION,
-            "healthcare_inflation": self.HEALTHCARE_INFLATION,
+            "general_inflation_rate": self.GENERAL_INFLATION,
+            "healthcare_inflation_rate": self.HEALTHCARE_INFLATION,
             "pre_retirement_return": self.PRE_RETIREMENT_RETURN,
             "post_retirement_return": self.POST_RETIREMENT_RETURN,
-            "life_expectancy": self.LIFE_EXPECTANCY,
+            "life_expectancy_years": self.LIFE_EXPECTANCY,
             "safety_buffer_years": self.SAFETY_BUFFER_YEARS,
-            "rationale": assumptions.get("rationale", ""),
+            "rationale": rationale,
         }
     
     def _calculate_retirement_expense(self, current_expense: float, years: int) -> float:

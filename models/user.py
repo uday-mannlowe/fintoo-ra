@@ -127,6 +127,37 @@ class UpdateIncomeRequest(BaseModel):
     change_reason: Optional[str] = None
     updated_by: str = "user"
 
+class UpdateExpenseRequest(BaseModel):
+    new_monthly_expense: float = Field(..., gt=0)
+    change_reason: Optional[str] = None
+    updated_by: str = "user"
+
+class PostRetirementIncomeType(str, Enum):
+    pension   = "pension"
+    rental    = "rental"
+    annuity   = "annuity"
+    business  = "business"
+    other     = "other"
+
+class PostRetirementIncomeItem(BaseModel):
+    income_type:      PostRetirementIncomeType
+    monthly_amount:   float = Field(..., gt=0)
+    start_age:        int   = Field(..., ge=40, le=100)
+    is_guaranteed:    bool  = False
+
+class AddPostRetirementIncomeRequest(BaseModel):
+    incomes: List[PostRetirementIncomeItem] = Field(..., min_items=1)
+
+class UpdateAssetRequest(BaseModel):
+    current_value:        float = Field(..., ge=0)
+    monthly_contribution: float = Field(0, ge=0)
+    change_reason:        Optional[str] = None
+
+class UpdateLoanRequest(BaseModel):
+    outstanding_balance: float = Field(..., ge=0)
+    monthly_emi:         float = Field(..., gt=0)
+    change_reason:       Optional[str] = None
+
 class UserSnapshot(BaseModel):
     user_id: str
     email: str

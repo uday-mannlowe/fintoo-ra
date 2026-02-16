@@ -6,6 +6,9 @@ import logging
 from config import settings
 from database import db_manager
 from routers import onboarding
+from routers import calculations
+from routers import auth
+from routers import chatbot
 
 # Configure logging
 logging.basicConfig(
@@ -21,6 +24,9 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("Starting up Retirement Goal API")
+    # Seed default assumptions if the table is empty
+    from services.assumption_service import AssumptionService
+    AssumptionService.seed_defaults_if_empty()
     yield
     # Shutdown
     logger.info("Shutting down Retirement Goal API")
@@ -46,6 +52,18 @@ app.add_middleware(
 # Include routers
 app.include_router(
     onboarding.router,
+    prefix=settings.API_V1_PREFIX
+)
+app.include_router(
+    calculations.router,
+    prefix=settings.API_V1_PREFIX
+)
+app.include_router(
+    auth.router,
+    prefix=settings.API_V1_PREFIX
+)
+app.include_router(
+    chatbot.router,
     prefix=settings.API_V1_PREFIX
 )
 

@@ -1,8 +1,10 @@
 
 from database import db_manager
 from models.user import (
-    OnboardingRequest, EmailCheckResponse, OnboardingResponse, 
-    UserResponse, AddAssetsRequest, AddLoansRequest, UpdateIncomeRequest
+    OnboardingRequest, EmailCheckResponse, OnboardingResponse,
+    UserResponse, AddAssetsRequest, AddLoansRequest,
+    UpdateIncomeRequest, UpdateExpenseRequest,
+    AddPostRetirementIncomeRequest, UpdateAssetRequest, UpdateLoanRequest,
 )
 from typing import Dict, Any, Optional
 import logging
@@ -354,3 +356,161 @@ class OnboardingService:
             logger.error(f"Error fetching onboarding status: {e}")
             raise
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # NEW METHODS — completing the data collection + versioning layer
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def update_expense(user_id: str, data: "UpdateExpenseRequest") -> Dict[str, Any]:
+        """Versioned expense update — closes old record, inserts new."""
+        try:
+            with db_manager.get_cursor(commit=True) as cursor:
+                cursor.execute("""
+                    UPDATE expense_records
+                    SET effective_to = CURRENT_DATE - INTERVAL '1 day',
+                        is_current   = FALSE
+                    WHERE user_id = %s AND is_current = TRUE
+                """, (user_id,))
+
+                cursor.execute("""
+                    INSERT INTO expense_records
+                           (user_id, monthly_household_expense, effective_from, is_current)
+                    VALUES (%s, %s, CURRENT_DATE, TRUE)
+                    RETURNING expense_id::text, monthly_household_expense, effective_from
+                """, (user_id, data.new_monthly_expense))
+
+                result = cursor.fetchone()
+            logger.info(f"Expense updated for user {user_id}")
+            OnboardingService._trigger_recalculation(user_id)
+            return {"success": True, "message": "Expense updated", "new_expense": dict(result)}
+        except Exception as e:
+            logger.error(f"Error updating expense: {e}")
+            raise
+
+    @staticmethod
+    def add_post_retirement_income(user_id: str, data: "AddPostRetirementIncomeRequest") -> Dict[str, Any]:
+        """Add one or more post-retirement income sources."""
+        try:
+            with db_manager.get_cursor(commit=True) as cursor:
+                inserted = []
+                for item in data.incomes:
+                    cursor.execute("""
+                        INSERT INTO post_retirement_income
+                               (user_id, income_type, monthly_amount, start_age, is_guaranteed, is_active)
+                        VALUES (%s, %s, %s, %s, %s, TRUE)
+                        RETURNING post_income_id::text AS income_source_id, income_type, monthly_amount, start_age, is_guaranteed
+                    """, (
+                        user_id,
+                        item.income_type.value,
+                        item.monthly_amount,
+                        item.start_age,
+                        item.is_guaranteed,
+                    ))
+                    inserted.append(dict(cursor.fetchone()))
+            logger.info(f"Added {len(inserted)} post-retirement income sources for {user_id}")
+            OnboardingService._trigger_recalculation(user_id)
+            return {"success": True, "message": f"{len(inserted)} income source(s) added", "incomes": inserted}
+        except Exception as e:
+            logger.error(f"Error adding post-retirement income: {e}")
+            raise
+
+    @staticmethod
+    def update_retirement_asset(user_id: str, asset_id: str, data: "UpdateAssetRequest") -> Dict[str, Any]:
+        """Versioned asset update — deactivate old record, insert new with updated values."""
+        try:
+            with db_manager.get_cursor(commit=True) as cursor:
+                # Fetch existing asset details first
+                cursor.execute("""
+                    SELECT asset_type, asset_name FROM retirement_assets
+                    WHERE asset_id = %s AND user_id = %s AND is_active = TRUE
+                """, (asset_id, user_id))
+                existing = cursor.fetchone()
+                if not existing:
+                    raise ValueError(f"Asset {asset_id} not found or not active")
+
+                # Deactivate old
+                cursor.execute("""
+                    UPDATE retirement_assets SET is_active = FALSE
+                    WHERE asset_id = %s AND user_id = %s
+                """, (asset_id, user_id))
+
+                # Insert new
+                cursor.execute("""
+                    INSERT INTO retirement_assets
+                           (user_id, asset_type, asset_name, current_value, monthly_contribution, is_active)
+                    VALUES (%s, %s, %s, %s, %s, TRUE)
+                    RETURNING asset_id::text, asset_type, asset_name, current_value, monthly_contribution
+                """, (
+                    user_id,
+                    existing["asset_type"],
+                    existing["asset_name"],
+                    data.current_value,
+                    data.monthly_contribution,
+                ))
+                result = cursor.fetchone()
+            logger.info(f"Asset updated for user {user_id}, new asset_id={result['asset_id']}")
+            OnboardingService._trigger_recalculation(user_id)
+            return {"success": True, "message": "Asset updated", "asset": dict(result)}
+        except Exception as e:
+            logger.error(f"Error updating asset: {e}")
+            raise
+
+    @staticmethod
+    def update_loan(user_id: str, loan_id: str, data: "UpdateLoanRequest") -> Dict[str, Any]:
+        """Versioned loan update — deactivate old record, insert new with updated values."""
+        try:
+            with db_manager.get_cursor(commit=True) as cursor:
+                cursor.execute("""
+                    SELECT loan_type, principal_amount, interest_rate, start_date, end_date
+                    FROM current_loans
+                    WHERE loan_id = %s AND user_id = %s AND is_active = TRUE
+                """, (loan_id, user_id))
+                existing = cursor.fetchone()
+                if not existing:
+                    raise ValueError(f"Loan {loan_id} not found or not active")
+
+                cursor.execute("""
+                    UPDATE current_loans SET is_active = FALSE
+                    WHERE loan_id = %s AND user_id = %s
+                """, (loan_id, user_id))
+
+                cursor.execute("""
+                    INSERT INTO current_loans
+                           (user_id, loan_type, principal_amount, outstanding_balance,
+                            monthly_emi, interest_rate, start_date, end_date, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+                    RETURNING loan_id::text, loan_type, outstanding_balance, monthly_emi
+                """, (
+                    user_id,
+                    existing["loan_type"],
+                    existing["principal_amount"],
+                    data.outstanding_balance,
+                    data.monthly_emi,
+                    existing["interest_rate"],
+                    existing["start_date"],
+                    existing["end_date"],
+                ))
+                result = cursor.fetchone()
+            logger.info(f"Loan updated for user {user_id}, new loan_id={result['loan_id']}")
+            OnboardingService._trigger_recalculation(user_id)
+            return {"success": True, "message": "Loan updated", "loan": dict(result)}
+        except Exception as e:
+            logger.error(f"Error updating loan: {e}")
+            raise
+
+    @staticmethod
+    def _trigger_recalculation(user_id: str) -> None:
+        """
+        Auto-trigger retirement recalculation after any data change.
+        This is what makes the system 'living' as per the design doc (Section 10).
+        Runs synchronously — swap for a background task if needed.
+        """
+        try:
+            from services.calculation_service import CalculationService
+            snapshot = OnboardingService.get_user_snapshot(user_id)
+            if snapshot:
+                CalculationService.calculate_and_store(user_id, snapshot)
+                logger.info(f"Auto-recalculation triggered for user {user_id}")
+        except Exception as e:
+            # Non-fatal — log but don't fail the main operation
+            logger.warning(f"Auto-recalculation failed for user {user_id}: {e}")
